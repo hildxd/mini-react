@@ -1,6 +1,6 @@
 type Props = Record<PropertyKey, any> & { children: ReactElements[] };
 export type ReactElements = {
-  type: string;
+  type: string | Function;
   props: Props;
 };
 
@@ -10,7 +10,7 @@ type Fiber = {
   parent?: Fiber;
   sibling?: Fiber;
   children?: Fiber;
-  type: string;
+  type: string | Function;
   props: Props;
 };
 
@@ -25,7 +25,7 @@ function createTextElement(text: string): ReactElements {
 }
 
 export function createElement(
-  type: string,
+  type: string | Function,
   props: Props,
   ...children: any[]
 ): ReactElements {
@@ -44,6 +44,7 @@ export function createElement(
 }
 
 let nextFiber: Fiber | undefined = undefined;
+let root: Fiber | null = null;
 export function render(element: ReactElements, container: HTMLElement | Text) {
   nextFiber = {
     dom: container,
@@ -53,6 +54,7 @@ export function render(element: ReactElements, container: HTMLElement | Text) {
     element: element,
     type: element.type,
   };
+  root = nextFiber;
 }
 
 const wookLoop: IdleRequestCallback = (options) => {
@@ -62,29 +64,55 @@ const wookLoop: IdleRequestCallback = (options) => {
     nextFiber = runUnitOfWork(nextFiber);
     shouldYield = deadline < 1;
   }
+  if (!nextFiber && root) {
+    commitRoot();
+  }
   requestIdleCallback(wookLoop);
 };
 
+function commitRoot() {
+  commitWork(root?.children);
+  root = null;
+}
+
+function commitWork(fiber?: Fiber) {
+  if (!fiber) return;
+  let parent = fiber.parent;
+  while (!parent?.dom) {
+    parent = parent?.parent;
+  }
+
+  if (fiber.dom) {
+    parent?.dom?.appendChild(fiber.dom!);
+  }
+  commitWork(fiber.children);
+  commitWork(fiber.sibling);
+}
+
 requestIdleCallback(wookLoop);
 
-function runUnitOfWork(fiber?: Fiber) {
-  if (!fiber) return;
+function createDom(fiber: Fiber) {
   if (!fiber.dom) {
     const dom = (fiber.dom =
       fiber.type === "TEXT_ELEMENT"
         ? document.createTextNode("")
-        : document.createElement(fiber.type));
+        : document.createElement(fiber.type as string));
 
-    const isProperty = (key: string) => key !== "children";
-    Object.keys(fiber.props)
-      .filter(isProperty)
-      .forEach((name) => {
-        // @ts-ignore
-        dom[name] = fiber.props[name];
-      });
-    fiber.parent?.dom?.appendChild(dom);
+    return dom;
   }
+}
 
+function updateProps(fiber: Fiber, dom: Fiber["dom"]) {
+  const isProperty = (key: string) => key !== "children";
+  Object.keys(fiber.props)
+    .filter(isProperty)
+    .forEach((name) => {
+      // @ts-ignore
+      dom[name] = fiber.props[name];
+    });
+}
+
+function initChildren(fiber: Fiber) {
   let prevChild: Fiber | null = null;
   fiber.props.children.forEach((child, index) => {
     const newFiber: Fiber = {
@@ -103,6 +131,17 @@ function runUnitOfWork(fiber?: Fiber) {
     }
     prevChild = newFiber;
   });
+}
+
+function runUnitOfWork(fiber?: Fiber) {
+  if (!fiber) return;
+  if (typeof fiber.type === "function") {
+    fiber.props.children = [fiber.type(fiber.props)];
+  } else {
+    const dom = createDom(fiber);
+    updateProps(fiber, dom!);
+  }
+  initChildren(fiber);
 
   if (fiber.children) return fiber.children;
   if (fiber.sibling) return fiber.sibling;
