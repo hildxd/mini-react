@@ -1,3 +1,4 @@
+import React from "./core/React";
 const Counter = () => {
   return <div>counter</div>;
 };
